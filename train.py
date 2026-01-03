@@ -56,6 +56,9 @@ class CLIConfig:
     # Dataset source
     dataset_source: str = "huggingface"  # "huggingface" or "local"
 
+    # KernelBench prompt options
+    prompt_option: str = "one_shot"  # zero_shot, one_shot, few_shot
+
     # Verbosity
     verbose: bool = False
 
@@ -105,6 +108,7 @@ def build_config(cli_config: CLIConfig) -> train.Config:
         test_split=cli_config.test_split,
         verbose=cli_config.verbose,
         dataset_source=cli_config.dataset_source,
+        prompt_option=cli_config.prompt_option,
     )
 
     # Create training config

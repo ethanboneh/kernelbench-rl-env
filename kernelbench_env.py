@@ -31,19 +31,40 @@ from tinker_cookbook import model_info
 from modal_evaluator import evaluate_on_modal
 
 
-# System prompt for kernel optimization
-KERNEL_OPTIMIZATION_SYSTEM_PROMPT = """
-You are an expert GPU kernel optimizer. Your task is to optimize PyTorch models by writing custom GPU kernels.
+def _get_kernelbench_prompt(
+    reference_src: str,
+    backend: str = "triton",
+    precision: str = "fp32",
+    gpu: str = "L40S",
+    prompt_option: str = "one_shot",
+) -> str:
+    """
+    Get KernelBench's official prompt for the given backend.
 
-Given a reference PyTorch implementation, you should:
-1. Analyze the computation pattern
-2. Identify optimization opportunities
-3. Implement an optimized kernel using {backend}
-4. Ensure correctness matches the reference
-5. Maximize performance
+    This uses KernelBench's built-in prompt builder which includes:
+    - Backend-specific instructions (Triton, CUDA, CuTe, TileLang)
+    - Example kernels (for one_shot and few_shot modes)
+    - Hardware-specific guidance
+    - Best practices for the backend
+    """
+    import sys
+    from pathlib import Path
 
-Output only the complete Python code with the optimized ModelNew class.
-""".strip()
+    # Add KernelBench to path
+    kb_path = Path(__file__).parent / "KernelBench" / "src"
+    if str(kb_path) not in sys.path:
+        sys.path.insert(0, str(kb_path))
+
+    from kernelbench.prompt_constructor_toml import get_prompt_for_backend
+
+    return get_prompt_for_backend(
+        ref_arch_src=reference_src,
+        backend=backend,
+        option=prompt_option,
+        precision=precision,
+        include_hardware=True,  # Include GPU-specific guidance
+        gpu_name=gpu,
+    )
 
 
 class KernelBenchEnv(Env):
@@ -66,6 +87,7 @@ class KernelBenchEnv(Env):
         num_correct_trials: int = 3,
         num_perf_trials: int = 50,
         verbose: bool = False,
+        prompt_option: str = "one_shot",  # KernelBench prompt option
     ):
         self.reference_src = reference_src
         self.problem_name = problem_name
@@ -77,49 +99,33 @@ class KernelBenchEnv(Env):
         self.num_correct_trials = num_correct_trials
         self.num_perf_trials = num_perf_trials
         self.verbose = verbose
+        self.prompt_option = prompt_option
         self.done = False
-
-        # Build system message
-        self.system_message = {
-            "role": "system",
-            "content": KERNEL_OPTIMIZATION_SYSTEM_PROMPT.format(backend=backend),
-        }
 
     @property
     def stop_condition(self):
         return self.renderer.get_stop_sequences()
 
-    def _build_prompt(self) -> str:
-        """Build the optimization prompt for the agent."""
-        prompt = f"""Problem: {self.problem_name}
-
-{self.problem_description}
-
-Reference Implementation:
-```python
-{self.reference_src}
-```
-
-Task: Write an optimized version using {self.backend} kernels. Create a new class called ModelNew that improves upon the reference implementation.
-
-Requirements:
-- Use {self.backend} for kernel implementation
-- Maintain correctness (outputs must match reference within tolerance)
-- Optimize for performance on {self.gpu} GPU
-- Use {self.precision} precision
-
-Output the complete Python code with the optimized ModelNew class:
-"""
-        return prompt
-
     async def initial_observation(self) -> tuple[ModelInput, StopCondition]:
         """Return initial observation with the optimization task."""
+        # Use KernelBench's official prompt builder
+        kb_prompt = _get_kernelbench_prompt(
+            reference_src=self.reference_src,
+            backend=self.backend,
+            precision=self.precision,
+            gpu=self.gpu,
+            prompt_option=self.prompt_option,
+        )
+
+        # Create user message with KernelBench prompt
         user_message = {
             "role": "user",
-            "content": self._build_prompt(),
+            "content": kb_prompt,
         }
 
-        messages = [self.system_message, user_message]
+        # Build observation (just the user message, no system message needed
+        # since KernelBench prompt includes all necessary instructions)
+        messages = [user_message]
         observation = self.renderer.build_generation_prompt(messages)
 
         if self.verbose:
@@ -307,6 +313,7 @@ class KernelBenchEnvGroupBuilder(EnvGroupBuilder):
     num_correct_trials: int = 3
     num_perf_trials: int = 50
     verbose: bool = False
+    prompt_option: str = "one_shot"  # KernelBench prompt option
 
     async def make_envs(self) -> Sequence[Env]:
         """Create multiple identical environments for the same problem."""
@@ -322,6 +329,7 @@ class KernelBenchEnvGroupBuilder(EnvGroupBuilder):
                 num_correct_trials=self.num_correct_trials,
                 num_perf_trials=self.num_perf_trials,
                 verbose=self.verbose,
+                prompt_option=self.prompt_option,
             )
             for _ in range(self.num_envs)
         ]
@@ -345,6 +353,7 @@ class KernelBenchDataset(RLDataset):
     num_correct_trials: int = 3
     num_perf_trials: int = 50
     verbose: bool = False
+    prompt_option: str = "one_shot"  # KernelBench prompt option
 
     def get_batch(self, index: int) -> Sequence[EnvGroupBuilder]:
         """Get a batch of environment group builders."""
@@ -366,6 +375,7 @@ class KernelBenchDataset(RLDataset):
                 num_correct_trials=self.num_correct_trials,
                 num_perf_trials=self.num_perf_trials,
                 verbose=self.verbose,
+                prompt_option=self.prompt_option,
             )
             batch_builders.append(builder)
 
@@ -394,6 +404,7 @@ class KernelBenchDatasetBuilder(RLDatasetBuilder):
     test_split: float = 0.2  # Fraction of problems to use for testing
     verbose: bool = False
     dataset_source: str = "huggingface"  # "huggingface" or "local"
+    prompt_option: str = "one_shot"  # KernelBench prompt: zero_shot, one_shot, few_shot
 
     async def __call__(self) -> tuple[RLDataset, RLDataset]:
         """Build train and test datasets."""
@@ -423,6 +434,7 @@ class KernelBenchDatasetBuilder(RLDatasetBuilder):
             num_correct_trials=self.num_correct_trials,
             num_perf_trials=self.num_perf_trials,
             verbose=self.verbose,
+            prompt_option=self.prompt_option,
         )
 
         test_dataset = KernelBenchDataset(
@@ -436,6 +448,7 @@ class KernelBenchDatasetBuilder(RLDatasetBuilder):
             num_correct_trials=self.num_correct_trials,
             num_perf_trials=self.num_perf_trials,
             verbose=self.verbose,
+            prompt_option=self.prompt_option,
         )
 
         return train_dataset, test_dataset
