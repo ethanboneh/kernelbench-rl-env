@@ -198,7 +198,8 @@ Output the complete Python code with the optimized ModelNew class:
                 next_stop_condition=self.stop_condition,
                 episode_done=True,
                 reward=0.0,
-                metrics={"error": "no_code_found"},
+                metrics={},
+                logs={"error": "no_code_found"},
             )
 
         # Evaluate on Modal
@@ -225,7 +226,8 @@ Output the complete Python code with the optimized ModelNew class:
                 next_stop_condition=self.stop_condition,
                 episode_done=True,
                 reward=0.0,
-                metrics={"error": str(e)},
+                metrics={},
+                logs={"error": str(e)},
             )
 
         # Compute reward
@@ -233,20 +235,26 @@ Output the complete Python code with the optimized ModelNew class:
 
         # Build metrics for W&B logging
         # These will be aggregated and logged automatically by Tinker
+        # IMPORTANT: All values must be numeric (float or int), no strings!
         metrics = {
             "env/compiled": 1.0 if eval_result.get("compiled") else 0.0,
             "env/correct": 1.0 if eval_result.get("correctness") else 0.0,
-            "env/reward": reward,  # Explicitly include reward in metrics
+            "env/reward": float(reward),  # Ensure it's a float
         }
 
-        if eval_result.get("runtime"):
-            metrics["env/runtime_us"] = eval_result["runtime"]
-        if eval_result.get("ref_runtime"):
-            metrics["env/ref_runtime_us"] = eval_result["ref_runtime"]
-            # Compute speedup
-            if eval_result["runtime"] > 0:
-                speedup = eval_result["ref_runtime"] / eval_result["runtime"]
-                metrics["env/speedup"] = speedup
+        # Add runtime metrics (with defensive checks for numeric values)
+        runtime = eval_result.get("runtime")
+        if runtime is not None and isinstance(runtime, (int, float)) and runtime > 0:
+            metrics["env/runtime_us"] = float(runtime)
+
+        ref_runtime = eval_result.get("ref_runtime")
+        if ref_runtime is not None and isinstance(ref_runtime, (int, float)) and ref_runtime > 0:
+            metrics["env/ref_runtime_us"] = float(ref_runtime)
+
+            # Compute speedup only if both runtimes are valid
+            if runtime is not None and isinstance(runtime, (int, float)) and runtime > 0:
+                speedup = ref_runtime / runtime
+                metrics["env/speedup"] = float(speedup)
 
         # Add logs for debugging (not aggregated, just displayed)
         logs = {
