@@ -231,27 +231,37 @@ Output the complete Python code with the optimized ModelNew class:
         # Compute reward
         reward = self._compute_reward(eval_result)
 
-        # Build metrics
+        # Build metrics for W&B logging
+        # These will be aggregated and logged automatically by Tinker
         metrics = {
-            "compiled": 1.0 if eval_result.get("compiled") else 0.0,
-            "correct": 1.0 if eval_result.get("correctness") else 0.0,
+            "env/compiled": 1.0 if eval_result.get("compiled") else 0.0,
+            "env/correct": 1.0 if eval_result.get("correctness") else 0.0,
+            "env/reward": reward,  # Explicitly include reward in metrics
         }
 
         if eval_result.get("runtime"):
-            metrics["runtime_us"] = eval_result["runtime"]
+            metrics["env/runtime_us"] = eval_result["runtime"]
         if eval_result.get("ref_runtime"):
-            metrics["ref_runtime_us"] = eval_result["ref_runtime"]
+            metrics["env/ref_runtime_us"] = eval_result["ref_runtime"]
             # Compute speedup
             if eval_result["runtime"] > 0:
-                metrics["speedup"] = eval_result["ref_runtime"] / eval_result["runtime"]
+                speedup = eval_result["ref_runtime"] / eval_result["runtime"]
+                metrics["env/speedup"] = speedup
+
+        # Add logs for debugging (not aggregated, just displayed)
+        logs = {
+            "problem": self.problem_name,
+            "backend": self.backend,
+            "gpu": self.gpu,
+        }
 
         # Log results
         if self.verbose:
             logtree.log_text(
-                f"[KernelBench] Result - Compiled: {metrics.get('compiled', 0)}, "
-                f"Correct: {metrics.get('correct', 0)}, "
-                f"Runtime: {metrics.get('runtime_us', 'N/A')} us, "
-                f"Speedup: {metrics.get('speedup', 'N/A')}x, "
+                f"[KernelBench] Result - Compiled: {metrics.get('env/compiled', 0)}, "
+                f"Correct: {metrics.get('env/correct', 0)}, "
+                f"Runtime: {metrics.get('env/runtime_us', 'N/A')} us, "
+                f"Speedup: {metrics.get('env/speedup', 'N/A')}x, "
                 f"Reward: {reward:.4f}"
             )
 
@@ -263,6 +273,7 @@ Output the complete Python code with the optimized ModelNew class:
             episode_done=True,
             reward=reward,
             metrics=metrics,
+            logs=logs,
         )
 
     async def _get_final_observation(self) -> ModelInput:
@@ -306,6 +317,10 @@ class KernelBenchEnvGroupBuilder(EnvGroupBuilder):
             )
             for _ in range(self.num_envs)
         ]
+
+    def logging_tags(self) -> list[str]:
+        """Return tags for metric aggregation in W&B."""
+        return ["kernelbench", self.backend, self.gpu, self.problem_name]
 
 
 @dataclass(frozen=True)
